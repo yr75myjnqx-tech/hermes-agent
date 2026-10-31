@@ -14,6 +14,7 @@ import contextlib
 import contextvars
 import logging
 import os
+import re
 import threading
 from dataclasses import dataclass
 from typing import Any, List, Optional
@@ -1817,9 +1818,23 @@ def _deliver_result(
     unverified_targets: list = []
     if wrap_response:
         task_name = job.get("name", job["id"])
+        # Operator standard 2026-10-26: bold title + one-line description + italic job_id.
+        # Description precedence: explicit job field -> prompt's first non-empty line
+        # (markdown stripped, 160-char cap) -> script-jobs fallback.
+        desc = (job.get("description") or "").strip()
+        if not desc:
+            src = job.get("prompt") or ""
+            if not src and job.get("script"):
+                desc = f"Script job — runs {job['script']}"
+            for ln in src.splitlines():
+                ln = ln.strip().lstrip("#").strip()
+                if ln:
+                    desc = re.sub(r"[*_`#>\[\]]", "", ln)[:160].strip()
+                    break
         delivery_content = (
-            f"Cronjob Response: {task_name}\n"
-            f"(job_id: {job.get('id', '')})\n"
+            f"**Cronjob Response: {task_name}**\n"
+            + (f"{desc}\n" if desc else "")
+            + f"*(job_id: {job.get('id', '')})*\n"
             f"-------------\n\n"
             f"{content}\n\n"
             "To stop or manage this job, send me a new message "
