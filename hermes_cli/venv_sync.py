@@ -702,6 +702,9 @@ def relaunch_command(
             index += 1
     # _hermes_relaunched marks the child this starts (not processes it spawns) for _relaunch_target;
     # a restore re-execs sys.orig_argv and keeps it, which is why that guard re-checks currency.
+    # A direct `python script.py` launch puts the script's directory at sys.path[0]; run_path
+    # does not, so the relaunch must re-add it or the script's own package layout breaks
+    # (e.g. hermes-webui server.py: `from api.auth import ...`).
     prefix = (f"import sys, runpy; sys.path.insert(0, {str(root)!r}); sys.argv = {argv!r}; "
               "sys._hermes_relaunched = True; ")
     if argv[0] == "-c":
@@ -709,9 +712,12 @@ def relaunch_command(
     elif module and module != "__main__":
         body = f"runpy.run_module({module!r}, run_name='__main__', alter_sys=True)"
     else:
+        script = Path(argv[0]).absolute()
+        if script.is_file() and script.parent != root:
+            prefix += f"sys.path.insert(1, {str(script.parent)!r}); "
         # distlib .exe launchers are executable zip files with __main__, not
         # importable modules named '__main__'. run_path handles both shapes.
-        body = f"runpy.run_path({str(Path(argv[0]).absolute())!r}, run_name='__main__')"
+        body = f"runpy.run_path({str(script)!r}, run_name='__main__')"
     return [str(python), *options, "-I", "-c", prefix + body]
 
 
