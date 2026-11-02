@@ -1,0 +1,8 @@
+name: html_report
+version: 1.0.0
+description: "Scoped HTML report writer for the HerbAI profile. Adds write_html_report / list_html_reports tools that write ONLY to the approved Herb_Reports directory under MF4tb System_documents/Hermes. Grants NO shell, NO arbitrary file access."
+author: "SpockAI (Chief of Staff)"
+kind: standalone
+plugins:
+  toolsets:
+    - html_report

@@ -1,0 +1,8 @@
+name: portfolio_query
+description: "Scoped read-only portfolio tools for the Quark profile. Adds portfolio_positions / portfolio_top / portfolio_nav / portfolio_price tools that query the local portfolio.db (holdings, owners, cost basis) and ticker.db (prices) SQLite stores — no terminal/file access required, stdlib-only."
+version: 1.0.0
+author: "SpockAI (Chief of Staff)"
+kind: standalone
+plugins:
+  toolsets:
+    - portfolio_query

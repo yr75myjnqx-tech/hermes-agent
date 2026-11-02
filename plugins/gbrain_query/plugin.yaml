@@ -1,0 +1,8 @@
+name: gbrain_query
+description: "Scoped read-only GBrain knowledge-base query tools for the HerbAI profile. Adds gbrain_status / gbrain_search / gbrain_recall / gbrain_facets tools that GET the GBrain /v1 API on localhost:5052 (no terminal/file access required)."
+version: 1.0.0
+author: "SpockAI (Chief of Staff)"
+kind: standalone
+plugins:
+  toolsets:
+    - gbrain_query

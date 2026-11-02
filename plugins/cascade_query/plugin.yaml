@@ -1,0 +1,8 @@
+name: cascade_query
+description: "Scoped read-only Cascade v2 query tools for the Quark profile. Adds cascade_status / cascade_ranked / cascade_deep_dive / cascade_contradictions / cascade_theses tools that read the Cascade v2 engine output (ranked, signed, evidence-tagged candidate lists) from the harvest7 Postgres DB. No terminal/file access required; read-only SELECTs only."
+version: 1.0.0
+author: "SpockAI (Chief of Staff)"
+kind: standalone
+plugins:
+  toolsets:
+    - cascade_query

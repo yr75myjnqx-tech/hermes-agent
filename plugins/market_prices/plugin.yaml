@@ -1,0 +1,8 @@
+name: market_prices
+description: "Scoped read-only market-data tools for the HerbAI profile. Adds market_price / market_quotes / market_history tools that GET Yahoo Finance's public v8 chart API (query1.finance.yahoo.com) for live closing prices, quotes and 52-week context — no terminal/file access required, stdlib-only."
+version: 1.0.0
+author: "SpockAI (Chief of Staff)"
+kind: standalone
+plugins:
+  toolsets:
+    - market_prices

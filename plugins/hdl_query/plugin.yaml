@@ -1,0 +1,8 @@
+name: hdl_query
+description: "Scoped read-only Hermes Document Library (HDL) tools. Adds hdl_search / hdl_read / hdl_list that query the HDL catalogue and read documents from ~/harvest7/docs-library/ — no terminal, no file toolset, no writes."
+version: 1.0.0
+author: "SpockAI (Chief of Staff)"
+kind: standalone
+plugins:
+  toolsets:
+    - hdl_query

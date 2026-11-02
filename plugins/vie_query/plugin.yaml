@@ -1,0 +1,8 @@
+name: vie_query
+description: "Scoped read-only VIE Google Sheets query tools for the Quark profile. Adds vie_lookup / vie_universe / vie_stance / vie_tab tools that read the VIE (Value Investor's Edge) shipping/offshore analytics via the Google Sheets API (no terminal/file access required)."
+version: 1.0.0
+author: "SpockAI (Chief of Staff)"
+kind: standalone
+plugins:
+  toolsets:
+    - vie_query
