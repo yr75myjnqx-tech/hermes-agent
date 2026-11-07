@@ -1,0 +1,13 @@
+{
+  "_comment": "Copy this file to ~/.hermes/whatsapp_targets.json and fill in real values. Never commit the real file.",
+  "targets": {
+    "nic": "PHONE_OR_LID_JID@s.whatsapp.net",
+    "morgan": "PHONE_OR_LID_JID@s.whatsapp.net",
+    "herb_and_i": "GROUP_ID@g.us"
+  },
+  "labels": {
+    "nic": "Nic (DM)",
+    "morgan": "Morgan (DM)",
+    "herb_and_i": "Herb & I group"
+  }
+}

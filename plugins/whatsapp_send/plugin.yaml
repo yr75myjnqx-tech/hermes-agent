@@ -1,0 +1,8 @@
+name: whatsapp_send
+version: 1.0.0
+description: "Scoped outbound WhatsApp send tool for a persona profile (allowlisted targets)."
+author: "SpockAI (Chief of Staff)"
+kind: standalone
+plugins:
+  toolsets:
+    - whatsapp_send
