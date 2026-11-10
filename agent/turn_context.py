@@ -21,6 +21,7 @@ from agent.conversation_compression import recover_rotated_compression_session
 from agent.iteration_budget import IterationBudget
 from agent.memory_context import build_memory_context_block
 from agent.memory_provider import is_trivial_prompt
+from agent.memory_assembly import maybe_assemble_memory as _maybe_assemble_memory
 from agent.message_content import flatten_message_text
 from agent.lsp.deferred import forward_to_agent as forward_lsp_verdicts
 from agent.plugin_live_notes import pop_plugin_notices
@@ -1018,6 +1019,14 @@ def _memory_turn_start_and_prefetch(
     with suppress(Exception):
         if not is_trivial_prompt(_query):
             ext_prefetch_cache = agent._memory_manager.prefetch_all(_query, session_id=agent.session_id) or ""
+    # Memory assembly engine (spec v1.1): entity-anchored enrichment of the prefetch
+    # blob, inserted between prefetch_all (H2) and build_memory_context_block (H3).
+    # Flag-gated; default OFF = this block never runs and behaviour is byte-identical.
+    # Fail-open: any engine error falls back to the raw prefetch text.
+    with suppress(Exception):
+        ext_prefetch_cache = _maybe_assemble_memory(
+            agent, _query, ext_prefetch_cache, session_id=agent.session_id,
+        )
     # Deterministic recall indicator via _emit_status so the model can't silently
     # drop injected memory.
     if ext_prefetch_cache:

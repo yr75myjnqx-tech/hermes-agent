@@ -1308,6 +1308,23 @@ DEFAULT_CONFIG = {
         # One external provider: bundled (retaindb, byterover) or catalog-installed (honcho,
         # hindsight, supermemory, mem0, openviking, holographic). Empty = built-in only.
         "provider": "",
+        # Memory assembly engine (SpockAI P1, spec v1.1): entity-anchored enrichment of the
+        # external-memory prefetch blob. Default OFF = byte-identical legacy recall behaviour
+        # and no manifest file. See agent/memory_assembly.py.
+        "assembly": {
+            "enabled": False,
+            "char_budget": 6000,          # total assembled-block budget (chars)
+            "manifest_path": "logs/memory_manifest.jsonl",  # relative to the Hermes home
+            "manifest_rotate_bytes": 50_000_000,
+            "lookup_timeout_s": 2.0,      # ONE global deadline for all structured lookups
+            "max_lookups": 6,             # concurrent structured-lookup fan-out cap
+            "max_ticker_entities": 6,
+            # Two-pass budget allocation: tier floors first (guaranteed representation),
+            # then remaining budget by global rank. Fractions of char_budget.
+            "tier_floors": {"gbrain": 0.50, "honcho": 0.30, "hem": 0.20},
+            "top_k_gbrain": 3,
+            "top_k_hem": 2,
+        },
     },
     # Subagent delegation: `backend` = task-routing strategy ("default": keys below), `backends.<name>` = its settings.
     "delegation": {
