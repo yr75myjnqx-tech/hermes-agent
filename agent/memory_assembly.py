@@ -21,6 +21,7 @@ Design contract (spec §3-§5):
 from __future__ import annotations
 
 import concurrent.futures as cf
+import hashlib
 import json
 import logging
 import os
@@ -131,6 +132,7 @@ class Record:
     created: str              # ISO date string or ""
     entity_match: float       # 1.0 structured, 0.3 lexical-only
     matched_entities: list[str] = field(default_factory=list)
+    field: str | None = None  # P2 WS-1: field/predicate metadata, if the store exposes it
 
 
 @dataclass
@@ -261,6 +263,81 @@ def rank_records(records: list[Record]) -> list[Record]:
     )
 
 
+# ── WS-1: read-side conflict/supersession resolution (P2, deterministic) ────
+
+def _norm_text(s: str) -> str:
+    """A1 normalisation: case-fold, trim, collapse whitespace."""
+    return " ".join(s.split()).casefold()
+
+
+def _record_field(rec: Record) -> str | None:
+    """Extract the field/predicate from record metadata, if any.
+
+    Coverage limitation (spec §8.1.2, honest): only records whose metadata
+    carries a field/predicate can be keyed. Today no store exposes one, so
+    this reads the optional ``field`` attribute that future store adapters may
+    set; everything else passes through unconflicted. Do not fake it.
+    """
+    fld = getattr(rec, "field", None)
+    return str(fld) if fld else None
+
+
+def resolve_conflicts(
+    records: list[Record],
+) -> tuple[list[Record], list[dict[str, Any]]]:
+    """Deterministic per-turn supersession (spec §8.1, A1).
+
+    Groups keyed records by normalised ``(entity, field)``; within a group
+    holding differing values, keeps exactly one by: newest timestamp → tier
+    priority → record_id. Value comparison is normalised exact string
+    inequality — near-duplicates are NOT conflicts (P3 semantic question).
+
+    Returns (surviving_records, conflict_events). Unkeyed records pass through
+    untouched. Resolution is recomputed each turn; nothing persists.
+    """
+    groups: dict[tuple[str, str], list[Record]] = {}
+    keyed: set[int] = set()
+    for rec in records:
+        fld = _record_field(rec)
+        if not fld:
+            continue
+        keyed.add(id(rec))
+        # Entity: the first matched entity, else the record id (deterministic).
+        ent = rec.matched_entities[0] if rec.matched_entities else rec.record_id
+        groups.setdefault((_norm_text(ent), _norm_text(fld)), []).append(rec)
+    conflict_events: list[dict[str, Any]] = []
+    survivors: list[Record] = []
+    for rec in records:
+        if id(rec) not in keyed:
+            survivors.append(rec)
+    for key, group in groups.items():
+        if len(group) == 1:
+            survivors.append(group[0])
+            continue
+        values = {_norm_text(r.text) for r in group}
+        if len(values) <= 1:
+            # Same value repeated: keep one (highest rank), no conflict event.
+            group_sorted = sorted(group, key=lambda r: (-r.entity_match, r.record_id))
+            survivors.append(group_sorted[0])
+            continue
+        # Differing values: resolve newest → tier → record_id.
+        group_sorted = sorted(
+            group,
+            key=lambda r: (_sort_date_desc(r.created), -_TIER_PRIORITY.get(r.tier, 0), r.record_id),
+        )
+        winner = group_sorted[0]
+        survivors.append(winner)
+        conflict_events.append({
+            "entity": key[0], "field": key[1],
+            "kept": winner.record_id,
+            "superseded": [
+                {"record_id": r.record_id, "superseded_by": winner.record_id}
+                for r in group_sorted[1:]
+            ],
+        })
+    return survivors, conflict_events
+
+
 def _sort_date_desc(created: str) -> float:
     """Recency sort key: NEWER = SMALLER (negated ordinal), so ascending sort
     puts newest first. Undated/unparseable records sink to the end."""
@@ -278,8 +355,16 @@ def _sort_date_desc(created: str) -> float:
 
 def budget_cut(
     ranked: list[Record], honcho_text: str, char_budget: int, tier_floors: dict[str, float],
+    combined_budget: int | None = None, legacy_chars: int = 0,
 ) -> tuple[list[Record], list[dict[str, Any]]]:
     """Two-pass allocation (spec §3[B]): floors first, then global rank.
+
+    P2 combined-budget semantics (spec §4.2, A3): when ``combined_budget`` is
+    given, the legacy prefetch text is charged FIRST against it and the
+    enrichment fills the remainder; the per-enrichment ``char_budget`` remains
+    a sub-ceiling. The legacy text is NEVER cut by the engine: if legacy alone
+    meets or exceeds the combined budget, enrichment contributes zero records
+    (all rejected ``over_budget_combined``).
 
     Returns (kept_records, rejected_entries). A record that does not fit whole
     is dropped, never truncated. The Honcho passthrough participates as one
@@ -294,9 +379,21 @@ def budget_cut(
                             text=honcho_text, created="", entity_match=0.3)
     pool = list(ranked)
     if honcho_rec:
-        pool.append(honcho_rec)
-    # Pass 1: tier floors, filled in rank order within each tier.
-    floor_chars = {tier: int(char_budget * frac) for tier, frac in tier_floors.items()}
+        if combined_budget is not None:
+            # P2 combined accounting: the honcho passthrough IS the legacy text,
+            # already charged as legacy_chars. Charging it again here would
+            # double-count it against the combined budget — exclude it.
+            pass
+        else:
+            pool.append(honcho_rec)
+    # Combined-budget headroom: legacy charged first; enrichment gets the remainder.
+    if combined_budget is not None:
+        enrichment_budget = max(0, combined_budget - legacy_chars)
+    else:
+        enrichment_budget = char_budget
+    # Pass 1: tier floors, filled in rank order within each tier. Floors are
+    # computed against the enrichment budget (never against legacy's share).
+    floor_chars = {tier: int(enrichment_budget * frac) for tier, frac in tier_floors.items()}
     floor_used: dict[str, int] = {tier: 0 for tier in floor_chars}
     deferred: list[Record] = []
     for rec in pool:
@@ -311,13 +408,14 @@ def budget_cut(
     # Pass 2: remaining budget by global rank (deferred list is already rank-ordered).
     for rec in deferred:
         size = len(rec.text)
-        if used + size <= char_budget:
+        if used + size <= enrichment_budget:
             kept.append(rec)
             used += size
         else:
+            reason = "over_budget_combined" if combined_budget is not None else "over_budget_rank"
             rejected.append({
                 "record_id": rec.record_id, "tier": rec.tier,
-                "reason": "over_budget_rank" if used + size > char_budget else "tier_floor",
+                "reason": reason,
                 "chars": size,
             })
     # Preserve global rank order in the kept list.
@@ -373,6 +471,15 @@ def _load_engine_config(agent: Any) -> dict[str, Any] | None:
     floors = asm.get("tier_floors")
     if not isinstance(floors, dict) or abs(sum(float(v) for v in floors.values()) - 1.0) > 0.01:
         logger.warning("memory.assembly: invalid tier_floors %r, engine disabled", floors)
+        return None
+    # P2 (WS-4.1, A2): pinned injection position. Only pre_user_turn is
+    # implemented; any other value (including reserved system_edge) disables
+    # the engine exactly like the tier-floor check.
+    position = asm.get("position", "pre_user_turn")
+    if position != "pre_user_turn":
+        logger.warning("memory.assembly: unsupported position %r (only "
+                       "'pre_user_turn' implemented; 'system_edge' reserved), engine disabled",
+                       position)
         return None
     return asm
 
@@ -496,9 +603,15 @@ def assemble(
         finally:
             ex.shutdown(wait=False, cancel_futures=True)
     ranked = rank_records(records)
+    # P2 WS-1: deterministic supersession, post-lookup / pre-rank. Unkeyed
+    # records pass through; conflict events go to the manifest only.
+    survivors, conflict_events = resolve_conflicts(ranked)
+    ranked = rank_records(survivors)
+    combined_budget = int(cfg.get("combined_char_budget", 0)) or None
     kept, rejected = budget_cut(
         ranked, raw_prefetch, int(cfg.get("char_budget", 6000)),
         dict(cfg.get("tier_floors", {"gbrain": 0.5, "honcho": 0.3, "hem": 0.2})),
+        combined_budget=combined_budget, legacy_chars=len(raw_prefetch),
     )
     # Compose: structured tiers first (rank order), Honcho passthrough last.
     parts: list[str] = []
@@ -511,9 +624,26 @@ def assemble(
     assembled = "\n".join(parts)
     if honcho_part:
         assembled = (assembled + "\n" + honcho_part) if assembled else honcho_part
+    # P2 WS-2: model-visible status line ONLY on total lookup failure (every
+    # lookup timeout/error, zero usable results). Fixed compile-time constant —
+    # never composed from store content or error text. Partial failure: nothing.
+    usable = any(s.status in ("found", "not_found") for s in statuses)
+    had_lookups = bool(lookups)
+    total_failure = had_lookups and not usable
+    if total_failure:
+        status_line = (
+            "MEMORY STATUS: enrichment unavailable this turn (lookup failure); "
+            "base prefetch only."
+        )
+        assembled = (status_line + "\n" + assembled) if assembled else status_line
     entry = None
     if manifest is not None:
+        legacy_chars = len(raw_prefetch)
+        # Enrichment chars = structured records kept (honcho passthrough is
+        # legacy, not enrichment; the status line is a constant, not content).
+        enrichment_chars = sum(len(r.text) for r in kept if r.tier != "honcho")
         entry = {
+            "schema": 2,
             "ts": datetime.now(UTC).isoformat(),
             "session_id": session_id, "turn": turn,
             "query_entities": entities.as_dict(),
@@ -525,6 +655,13 @@ def assemble(
                 for r in kept
             ],
             "rejected": rejected,
+            "conflicts": conflict_events,
+            "status_line_injected": total_failure,
+            "legacy_chars": legacy_chars,
+            "enrichment_chars": enrichment_chars,
+            "combined_chars": legacy_chars + enrichment_chars,
+            "assembled_sha256": hashlib.sha256(assembled.encode("utf-8")).hexdigest(),
+            "prefetch_sha256": hashlib.sha256(raw_prefetch.encode("utf-8")).hexdigest(),
         }
         manifest.write(entry)
     return assembled, entry

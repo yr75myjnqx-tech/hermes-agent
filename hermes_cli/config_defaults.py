@@ -1324,6 +1324,12 @@ DEFAULT_CONFIG = {
             "tier_floors": {"gbrain": 0.50, "honcho": 0.30, "hem": 0.20},
             "top_k_gbrain": 3,
             "top_k_hem": 2,
+            # P2 (spec v1.0): pinned injection position. Only pre_user_turn is
+            # implemented; system_edge is RESERVED and fails validation (A2).
+            "position": "pre_user_turn",
+            # P2: combined budget (legacy prefetch charged first, enrichment fills
+            # the remainder). Provisional default — recalibrate from manifest data.
+            "combined_char_budget": 9000,
         },
     },
     # Subagent delegation: `backend` = task-routing strategy ("default": keys below), `backends.<name>` = its settings.
