@@ -417,7 +417,8 @@ def fire_claim_fence(job_id: str, *, expected_owner: str):
         with _jobs_lock():
             job = next((item for item in load_jobs() if item.get("id") == job_id), None)
             claim = job.get("fire_claim") if isinstance(job, dict) else None
-            owns_claim = isinstance(claim, dict) and claim.get("by") == expected_owner
+            owns_claim = (isinstance(claim, dict) and claim.get("by") == expected_owner
+                          and claim.get("version") == _claim_version())
             if job is None:
                 owns_claim = self_removal_delivery_allowed(job_id)
         yield owns_claim
@@ -2258,6 +2259,8 @@ def _claim_is_live(claim: Any, now: datetime, ttl_seconds: float) -> bool:
     full window with "already being fired")."""
     if not isinstance(claim, dict) or not claim.get("at"):
         return False
+    if claim.get("version") and claim.get("version") != _claim_version():
+        return False
     claimed_at = _parse_aware(claim["at"])
     if claimed_at is None or not (0 <= _elapsed_seconds(now, claimed_at) < ttl_seconds):
         return False
@@ -2626,6 +2629,8 @@ def _refresh_claim(jobs: list[dict[str, Any]], claim: Any, expected_owner: str) 
     """Compare-and-refresh a claim's ``at`` stamp; False unless *expected_owner* still holds it."""
     if not isinstance(claim, dict) or claim.get("by") != expected_owner:
         return False
+    if claim.get("version") and claim.get("version") != _claim_version():
+        return False
     claim["at"] = _hermes_now().isoformat()
     save_jobs(jobs)
     return True
@@ -2720,6 +2725,19 @@ def _machine_id() -> str:
     return f"{host}:{os.getpid()}"
 
 
+def _claim_version() -> str:
+    """Code-identity stamp minted into every fire claim. A claim minted by stale gateway code
+    (a different checkout sha) must be refused, not refreshed or delivered: the version stamp is
+    what makes a stale claimer fail closed instead of silently re-owning a run it no longer owns.
+    Fail-closed to ``unknown`` when identity cannot be resolved."""
+    try:
+        from hermes_cli.version_info import get_code_identity
+        sha = get_code_identity().get("sha")
+        return str(sha) if sha else "unknown"
+    except Exception:
+        return "unknown"
+
+
 def claim_job_for_fire(
     job_id: str, *, claim_ttl_seconds: int = FIRE_CLAIM_TTL_SECONDS, force: bool = False,
     manual: bool = False, return_job: bool = False,
@@ -2777,7 +2795,8 @@ def claim_job_for_fire(
             _activate_job_record(job)
         # Per-acquisition token: a process may legitimately reclaim its own stale lease, and the
         # previous runner must not heartbeat the new claim merely because hostname + PID match.
-        job["fire_claim"] = {"at": now.isoformat(), "by": f"{_machine_id()}:{uuid.uuid4().hex}"}
+        job["fire_claim"] = {"at": now.isoformat(), "by": f"{_machine_id()}:{uuid.uuid4().hex}",
+                             "version": _claim_version()}
         # Claimed: the occurrence is now owned by a run (its ledger row + fire claim carry it).
         job.pop("pending_slot", None)
         if slot := extra_fire.pending_slot(job, now, manual_fire):
@@ -3237,7 +3256,7 @@ def _evaluate_due_job(job: dict[str, Any], scan: _DueScan, run_claim_ttl: float)
         # same HERMES_HOME must not re-dispatch it while in flight, and advancing next_run_at by a
         # fixed window is not enough for a run that outlives a tick. The other process sees the
         # fresh claim and skips; mark_job_run() clears it. The TTL only covers a tick that DIES.
-        claim = {"at": now.isoformat(), "by": _machine_id()}
+        claim = {"at": now.isoformat(), "by": _machine_id(), "version": _claim_version()}
         if _elapsed_seconds(now, d.next_run_dt) > ONESHOT_GRACE_SECONDS:  # only an outage lets it through
             claim["outage"] = True
         job["run_claim"] = claim
